@@ -3,11 +3,9 @@ import re
 import regex
 import textwrap
 import unicodedata
+import importlib  # Required for lazy loading modules
 from common.config import UserConfig
-from common.db_ops import generate_glossary_dict, generate_m00_dict, init_db
-from common.translators.deepl import DeepLTranslate
-from common.translators.googletranslate import GoogleTranslate
-from common.translators.googletranslatefree import GoogleTranslateFree
+from common.db_ops import generate_glossary_dict, generate_m00_dict, init_db # Note: translators now imported dynamically via _get_translator_instance helper
 from functools import cache
 from loguru import logger as log
 
@@ -28,7 +26,18 @@ class Translator:
     service = None
     api_key = None
     glossary = None
-
+    _instance_cache = {} # Class-level cache for translation instances
+    _SERVICE_API = {
+        "deepl": ("common.translators.deepl", "DeepLTranslate"), # Moved APIs into a dictionary for readability and ease of maintenance
+        "google": ("common.translators.googletranslate", "GoogleTranslate"),
+        "googlefree": ("common.translators.googletranslatefree", "GoogleTranslateFree"),
+        "googletranslatepa": ("common.translators.googletranslatepa", "GoogleTranslatePa"),
+        "chatgpt": ("common.translators.chatgpt", "ChatGPTTranslate"),
+        "ollama": ("common.translators.ollama", "OllamaTranslate"),
+        "yandex": ("common.translators.yandex", "YandexTranslate"),
+        "libretranslate": ("common.translators.libretranslate", "LibreTranslate")
+    }
+    
     def __init__(self):
         if Translator.service is None:
             user_settings = UserConfig()
@@ -237,54 +246,45 @@ class Translator:
         return en_bytes > jp_bytes
 
     def __api_translate(self, text: list) -> list:
-        """Translates a list of strings, passing them through our glossary
-        first.
-
-        :param text: List of text strings to be translated.
-        :returns: A translated list of strings in the same order they
-            were given.
-        """
+        """Translates a list of strings using the cached translation service.""" # Consolidated if-elif list to class-level _SERVICE_API Dict
         for i, phrase in enumerate(text):
             text[i] = self.__glossify(phrase)
 
-        if Translator.service == "deepl":
-            translator = DeepLTranslate(Translator.api_key)
+        try:
+            translator = self._get_translator_instance() # Retrieve instance via the helper method
             return translator.translate(text)
+        except Exception as e:
+            log.exception(f"Translation failed for service '{Translator.service}': {e}")
+            return []
+    
+    def _get_translator_instance(self):
+        """Retrieve or initialize the translation instance from the class-level cache.""" # New helper function for instance caching
 
-        elif Translator.service == "google":
-            translator = GoogleTranslate(Translator.api_key)
-            return translator.translate(text)
+        if Translator.service not in Translator._SERVICE_API: # 1. Check if service is supported
+            log.error(f"Service '{Translator.service}' is not supported.")
+            raise ValueError(f"Unsupported translation service: {Translator.service}")
+        
+        if Translator.service in Translator._instance_cache: # 2. Return from cache if already initialized
+            return Translator._instance_cache[Translator.service]
 
-        elif Translator.service == "googlefree":
-            translator = GoogleTranslateFree()
-            return translator.translate(text)
+        try:
+            module_path, class_name = Translator._SERVICE_API[Translator.service] # 3. Lazy import and initialize the class
+            log.info(f"Initializing new {Translator.service} translation instance...")
+            
+            module = importlib.import_module(module_path)
+            translator_class = getattr(module, class_name)
+            
+            if Translator.api_key: # Instantiate the class (passing api_key if it exists)
+                instance = translator_class(Translator.api_key)
+            else:
+                instance = translator_class()
+                
+            Translator._instance_cache[Translator.service] = instance # Store in cache and return
+            return instance
 
-        elif Translator.service == "googletranslatepa":
-            from common.translators.googletranslatepa import GoogleTranslatePa
-
-            return GoogleTranslatePa().translate(text)
-
-        elif Translator.service == "chatgpt":
-            from common.translators.chatgpt import ChatGPTTranslate
-
-            return ChatGPTTranslate(Translator.api_key).translate(text)
-
-        elif Translator.service == "ollama":
-            from common.translators.ollama import OllamaTranslate
-
-            return OllamaTranslate().translate(text)
-
-        elif Translator.service == "yandex":
-            from common.translators.yandex import YandexTranslate
-
-            return YandexTranslate().translate(text)
-
-        elif Translator.service == "libretranslate":
-            from common.translators.libretranslate import LibreTranslate
-
-            return LibreTranslate(Translator.api_key).translate(text)
-
-        return []
+        except Exception as e:
+            log.error(f"Failed to initialize {Translator.service} from {module_path}: {e}")
+            raise
 
     def translate(self, text: str, wrap_width: int, max_lines=None, add_brs=True):
         """Sanitizes different tags and symbols, then translates the string.
