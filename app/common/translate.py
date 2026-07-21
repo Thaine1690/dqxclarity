@@ -1,11 +1,15 @@
+import importlib  # Required for lazy loading modules
 import pykakasi
 import re
 import regex
 import textwrap
 import unicodedata
-import importlib  # Required for lazy loading modules
 from common.config import UserConfig
-from common.db_ops import generate_glossary_dict, generate_m00_dict, init_db # Note: translators now imported dynamically via _get_translator_instance helper
+from common.db_ops import (  # Note: translators now imported dynamically via _get_translator_instance helper
+    generate_glossary_dict,
+    generate_m00_dict,
+    init_db,
+)
 from functools import cache
 from loguru import logger as log
 
@@ -26,18 +30,21 @@ class Translator:
     service = None
     api_key = None
     glossary = None
-    _instance_cache = {} # Class-level cache for translation instances
+    _instance_cache = {}  # Class-level cache for translation instances
     _SERVICE_API = {
-        "deepl": ("common.translators.deepl", "DeepLTranslate"), # Moved APIs into a dictionary for readability and ease of maintenance
+        "deepl": (
+            "common.translators.deepl",
+            "DeepLTranslate",
+        ),  # Moved APIs into a dictionary for readability and ease of maintenance
         "google": ("common.translators.googletranslate", "GoogleTranslate"),
         "googlefree": ("common.translators.googletranslatefree", "GoogleTranslateFree"),
         "googletranslatepa": ("common.translators.googletranslatepa", "GoogleTranslatePa"),
         "chatgpt": ("common.translators.chatgpt", "ChatGPTTranslate"),
         "ollama": ("common.translators.ollama", "OllamaTranslate"),
         "yandex": ("common.translators.yandex", "YandexTranslate"),
-        "libretranslate": ("common.translators.libretranslate", "LibreTranslate")
+        "libretranslate": ("common.translators.libretranslate", "LibreTranslate"),
     }
-    
+
     def __init__(self):
         if Translator.service is None:
             user_settings = UserConfig()
@@ -246,40 +253,40 @@ class Translator:
         return en_bytes > jp_bytes
 
     def __api_translate(self, text: list) -> list:
-        """Translates a list of strings using the cached translation service.""" # Consolidated if-elif list to class-level _SERVICE_API Dict
+        """Translates a list of strings using the cached translation service."""  # Consolidated if-elif list to class-level _SERVICE_API Dict
         for i, phrase in enumerate(text):
             text[i] = self.__glossify(phrase)
 
         try:
-            translator = self._get_translator_instance() # Retrieve instance via the helper method
+            translator = self._get_translator_instance()  # Retrieve instance via the helper method
             return translator.translate(text)
         except Exception as e:
             log.exception(f"Translation failed for service '{Translator.service}': {e}")
             return []
-    
-    def _get_translator_instance(self):
-        """Retrieve or initialize the translation instance from the class-level cache.""" # New helper function for instance caching
 
-        if Translator.service not in Translator._SERVICE_API: # 1. Check if service is supported
+    def _get_translator_instance(self):
+        """Retrieve or initialize the translation instance from the class-level cache."""  # New helper function for instance caching
+
+        if Translator.service not in Translator._SERVICE_API:  # 1. Check if service is supported
             log.error(f"Service '{Translator.service}' is not supported.")
             raise ValueError(f"Unsupported translation service: {Translator.service}")
-        
-        if Translator.service in Translator._instance_cache: # 2. Return from cache if already initialized
+
+        if Translator.service in Translator._instance_cache:  # 2. Return from cache if already initialized
             return Translator._instance_cache[Translator.service]
 
         try:
-            module_path, class_name = Translator._SERVICE_API[Translator.service] # 3. Lazy import and initialize the class
+            module_path, class_name = Translator._SERVICE_API[Translator.service]  # 3. Lazy import and initialize the class
             log.info(f"Initializing new {Translator.service} translation instance...")
-            
+
             module = importlib.import_module(module_path)
             translator_class = getattr(module, class_name)
-            
-            if Translator.api_key: # Instantiate the class (passing api_key if it exists)
+
+            if Translator.api_key:  # Instantiate the class (passing api_key if it exists)
                 instance = translator_class(Translator.api_key)
             else:
                 instance = translator_class()
-                
-            Translator._instance_cache[Translator.service] = instance # Store in cache and return
+
+            Translator._instance_cache[Translator.service] = instance  # Store in cache and return
             return instance
 
         except Exception as e:
